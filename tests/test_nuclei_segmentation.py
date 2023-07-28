@@ -1,5 +1,6 @@
 import argparse
 import os
+import tempfile
 
 import numpy as np
 import skimage.io
@@ -9,8 +10,12 @@ import histomicstk.preprocessing.color_conversion as htk_cvt
 import histomicstk.preprocessing.color_deconvolution as htk_cdeconv
 import histomicstk.preprocessing.color_normalization as htk_cnorm
 import histomicstk.segmentation as htk_seg
+import histomicstk.segmentation.label as htk_seg_label
 
 from .datastore import datastore
+
+# Enable to generate groundtruth files in the /tmp directory
+GENERATE_GROUNDTRUTH = bool(os.environ.get('GENERATE_GROUNDTRUTH'))
 
 
 class TestNucleiSegmentation:
@@ -61,6 +66,10 @@ class TestNucleiSegmentation:
         # check if segmentation mask matches ground truth
         gtruth_mask_file = os.path.join(datastore.fetch(
             'Easy1_nuclei_seg_kofahi.npy'))
+
+        if GENERATE_GROUNDTRUTH:
+            gtruth_mask_file = os.path.join(tempfile.gettempdir(), 'Easy1_nuclei_seg_kofahi.npy')
+            np.save(gtruth_mask_file, im_nuclei_seg_mask.astype(np.uint8))
 
         im_gtruth_mask = np.load(gtruth_mask_file)
 
@@ -242,3 +251,70 @@ class TestNucleiSegmentation:
             src_mu_lab=None,
             src_sigma_lab=None)
         np.testing.assert_allclose(len(nuclei_list), 3000, 1e+2)
+
+    def test_removing_overlapping_nuclei(self):
+        # retrieve image from datastore
+        input_image_path = datastore.fetch('tcgaextract_ihergb.tiff')
+        self.args.inputImageFile = input_image_path
+        self.args.tile_overlap_value = 128
+        self.args.analysis_roi = [1400.0, 4.0, 1973.0, 1386.0]
+        self.args.nuclei_annotation_format = 'boundary'
+
+        # read the image
+        ts, is_wsi = nucl_det.read_input_image(self.args, process_whole_image=True)
+        it_kwargs = {
+            'tile_size': {'width': self.args.analysis_tile_size},
+            'scale': {'magnification': self.args.analysis_mag},
+            'tile_overlap': {'x': self.args.tile_overlap_value, 'y': self.args.tile_overlap_value},
+        }
+        # determine number of nuclei
+        tile_fgnd_frac_list = nucl_det.process_wsi(ts, it_kwargs, self.args)
+        nuclei_list = nucl_det.detect_nuclei_with_dask(
+            ts,
+            tile_fgnd_frac_list,
+            it_kwargs,
+            self.args,
+            invert_image=True,
+            is_wsi=is_wsi,
+            src_mu_lab=None,
+            src_sigma_lab=None)
+
+        after_overlap_removal = htk_seg_label.remove_overlap_nuclei(
+            nuclei_list, self.args.nuclei_annotation_format)
+
+        np.testing.assert_allclose(len(nuclei_list), 700, 5e+1)
+        np.testing.assert_allclose(len(after_overlap_removal), 650, 5e+1)
+
+    def test_removing_overlapping_nuclei_bbox(self):
+        # retrieve image from datastore
+        input_image_path = datastore.fetch('tcgaextract_ihergb.tiff')
+        self.args.inputImageFile = input_image_path
+        self.args.tile_overlap_value = 128
+        self.args.analysis_roi = [1400.0, 4.0, 1973.0, 1386.0]
+        self.args.nuclei_annotation_format = 'bbox'
+        self.args.remove_overlapping_nuclei_segmentation = True
+
+        # read the image
+        ts, is_wsi = nucl_det.read_input_image(self.args, process_whole_image=True)
+        it_kwargs = {
+            'tile_size': {'width': self.args.analysis_tile_size},
+            'scale': {'magnification': self.args.analysis_mag},
+            'tile_overlap': {'x': self.args.tile_overlap_value, 'y': self.args.tile_overlap_value},
+        }
+        # determine number of nuclei
+        tile_fgnd_frac_list = nucl_det.process_wsi(ts, it_kwargs, self.args)
+        nuclei_list = nucl_det.detect_nuclei_with_dask(
+            ts,
+            tile_fgnd_frac_list,
+            it_kwargs,
+            self.args,
+            invert_image=True,
+            is_wsi=is_wsi,
+            src_mu_lab=None,
+            src_sigma_lab=None)
+
+        after_overlap_removal = htk_seg_label.remove_overlap_nuclei(
+            nuclei_list, self.args.nuclei_annotation_format)
+
+        np.testing.assert_allclose(len(nuclei_list), 700, 5e+1)
+        np.testing.assert_allclose(len(after_overlap_removal), 600, 5e+1)
