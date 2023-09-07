@@ -3,11 +3,12 @@ import logging
 import os
 import pprint
 import time
+from pathlib import Path
 
 import large_image
 import numpy as np
 
-import histomicstk.preprocessing.color_deconvolution as htk_cdeconv
+import histomicstk
 import histomicstk.preprocessing.color_normalization as htk_cnorm
 import histomicstk.segmentation.label as htk_seg_label
 import histomicstk.segmentation.nuclear as htk_nuclear
@@ -45,77 +46,19 @@ def image_inversion_flag_setter(args=None):
     return invert_image, default_img_inversion
 
 
-def detect_tile_nuclei(slide_path, tile_position, args, it_kwargs,
-                       src_mu_lab=None, src_sigma_lab=None, invert_image=False,
-                       style=None, default_img_inversion=False):
+def validate_args(args):
+    # validates the input arguments
+    if not os.path.isfile(args.inputImageFile):
+        raise OSError('Input image file does not exist.')
 
-    # Flags
-    single_channel = False
+    if len(args.reference_mu_lab) != 3:
+        raise ValueError('Reference Mean LAB should be a 3 element vector.')
 
-    # get slide tile source
-    ts = large_image.getTileSource(slide_path, style=style)
+    if len(args.reference_std_lab) != 3:
+        raise ValueError('Reference Stddev LAB should be a 3 element vector.')
 
-    # get requested tile
-    tile_info = ts.getSingleTile(
-        tile_position=tile_position,
-        format=large_image.tilesource.TILE_FORMAT_NUMPY,
-        **it_kwargs)
-
-    # get tile image & check number of channels
-    single_channel = len(tile_info['tile'].shape) <= 2 or tile_info['tile'].shape[2] == 1
-    if single_channel:
-        im_tile = np.dstack((tile_info['tile'], tile_info['tile'], tile_info['tile']))
-        if default_img_inversion:
-            invert_image = True
-    else:
-        im_tile = tile_info['tile'][:, :, :3]
-
-    # perform image inversion
-    if invert_image:
-        im_tile = np.max(im_tile) - im_tile
-
-    # perform color normalization
-    im_nmzd = htk_cnorm.reinhard(im_tile,
-                                 args.reference_mu_lab,
-                                 args.reference_std_lab,
-                                 src_mu=src_mu_lab,
-                                 src_sigma=src_sigma_lab)
-
-    # perform color decovolution
-    w = cli_utils.get_stain_matrix(args)
-
-    # perform deconvolution
-    im_stains = htk_cdeconv.color_deconvolution(im_nmzd, w).Stains
-    im_nuclei_stain = im_stains[:, :, 0].astype(float)
-
-    # segment nuclear foreground
-    im_nuclei_fgnd_mask = im_nuclei_stain < args.foreground_threshold
-
-    # segment nuclei
-    im_nuclei_seg_mask = htk_nuclear.detect_nuclei_kofahi(
-        im_nuclei_stain,
-        im_nuclei_fgnd_mask,
-        args.min_radius,
-        args.max_radius,
-        args.min_nucleus_area,
-        args.local_max_search_radius
-    )
-
-    # Delete border nuclei
-    if args.ignore_border_nuclei is True:
-
-        im_nuclei_seg_mask = htk_seg_label.delete_border(im_nuclei_seg_mask)
-
-    # generate nuclei annotations
-    nuclei_annot_list = []
-
-    flag_nuclei_found = np.any(im_nuclei_seg_mask)
-
-    if flag_nuclei_found:
-        nuclei_annot_list = cli_utils.create_tile_nuclei_annotations(
-            im_nuclei_seg_mask, tile_info, args.nuclei_annotation_format)
-
-    return nuclei_annot_list
+    if len(args.analysis_roi) != 4:
+        raise ValueError('Analysis ROI must be a vector of 4 elements.')
 
 
 def process_wsi_as_whole_image(ts, invert_image=False, args=None, default_img_inversion=False):
@@ -216,12 +159,11 @@ def detect_nuclei_with_dask(ts, tile_fgnd_frac_list, it_kwargs, args,
             continue
 
         # detect nuclei
-        cur_nuclei_list = dask.delayed(detect_tile_nuclei)(
-            args.inputImageFile,
-            tile_position,
-            args, it_kwargs,
-            src_mu_lab, src_sigma_lab, invert_image=invert_image, style=args.style,
-            default_img_inversion=default_img_inversion
+        cur_nuclei_list = dask.delayed(htk_nuclear.detect_tile_nuclei)(
+            tile,
+            args,
+            src_mu_lab, src_sigma_lab, invert_image=invert_image,
+            default_img_inversion=default_img_inversion,
         )
 
         # append result to list
@@ -230,7 +172,7 @@ def detect_nuclei_with_dask(ts, tile_fgnd_frac_list, it_kwargs, args,
     tile_nuclei_list = dask.delayed(tile_nuclei_list).compute()
 
     nuclei_list = [anot
-                   for anot_list in tile_nuclei_list for anot in anot_list]
+                   for anot_list, _ in tile_nuclei_list for anot in anot_list]
 
     nuclei_detection_time = time.time() - start_time
 
@@ -248,37 +190,36 @@ def main(args):
     default_img_inversion = False
     process_whole_image = False
 
-    # initial arguments
-    it_kwargs = {
-        'tile_size': {'width': args.analysis_tile_size},
-        'scale': {'magnification': args.analysis_mag}
-    }
-
     total_start_time = time.time()
 
     print('\n>> CLI Parameters ...\n')
     pprint.pprint(vars(args))
 
-    if not os.path.isfile(args.inputImageFile):
-        raise OSError('Input image file does not exist.')
-
-    if len(args.reference_mu_lab) != 3:
-        raise ValueError('Reference Mean LAB should be a 3 element vector.')
-
-    if len(args.reference_std_lab) != 3:
-        raise ValueError('Reference Stddev LAB should be a 3 element vector.')
-
-    if len(args.analysis_roi) != 4:
-        raise ValueError('Analysis ROI must be a vector of 4 elements.')
+    validate_args(args)
 
     if np.all(np.array(args.analysis_roi) == -1):
         process_whole_image = True
     else:
         process_whole_image = False
 
-    # retrive style and frame
+    # Provide default value for tile_overlap
+    tile_overlap = args.tile_overlap_value
+    if tile_overlap == -1:
+        tile_overlap = (args.max_radius + 1) * 4
+
+    # retrive style
     if not args.style or args.style.startswith('{#control'):
         args.style = None
+
+    # initial arguments
+    it_kwargs = {
+        'tile_size': {'width': args.analysis_tile_size},
+        'scale': {'magnification': args.analysis_mag},
+        'tile_overlap': {'x': tile_overlap, 'y': tile_overlap},
+        'style': {args.style}
+    }
+
+    # retrive frame
     if not args.frame or args.frame.startswith('{#control'):
         args.frame = None
     elif not args.frame.isdigit():
@@ -374,9 +315,23 @@ def main(args):
         default_img_inversion=default_img_inversion)
 
     #
+    # Remove overlapping nuclei
+    #
+    if args.remove_overlapping_nuclei_segmentation:
+        print('\n>> Removing overlapping nuclei segmentations ...\n')
+        nuclei_removal_start_time = time.time()
+
+        nuclei_list = htk_seg_label.remove_overlap_nuclei(
+            nuclei_list, args.nuclei_annotation_format)
+        nuclei_removal_setup_time = time.time() - nuclei_removal_start_time
+
+        print('Number of nuclei after overlap removal {}'.format(len(nuclei_list)))
+        print('Nuclei removal processing time = {}'.format(
+            cli_utils.disp_time_hms(nuclei_removal_setup_time)))
+
+    #
     # Write annotation file
     #
-
     print('\n>> Writing annotation file ...\n')
 
     annotation = {
@@ -386,6 +341,8 @@ def main(args):
             'src_mu_lab': None if src_mu_lab is None else src_mu_lab.tolist(),
             'src_sigma_lab': None if src_sigma_lab is None else src_sigma_lab.tolist(),
             'params': vars(args),
+            'cli': Path(__file__).stem,
+            'version': histomicstk.__version__,
         },
     }
 
