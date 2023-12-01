@@ -56,9 +56,8 @@ setup(
         'distributed',
         # large image; for non-linux systems only install the PIL tile source
         # by default.
-        'large-image[sources];sys.platform=="linux"',
-        'large-image[sources];sys.platform=="linux2"',
-        'large-image[pil];sys.platform!="linux" and sys.platform!="linux2"',
+        'large-image[sources];sys.platform=="linux" or sys.platform=="linux2"',
+        'large-image[common];sys.platform!="linux" and sys.platform!="linux2"',
         'girder-slicer-cli-web',
         # cli
         'ctk-cli',
@@ -76,14 +75,14 @@ setup(
         'Development Status :: 5 - Production/Stable',
         'License :: OSI Approved :: Apache Software License',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.7',
         'Programming Language :: Python :: 3.8',
         'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
         'Programming Language :: Python :: 3.11',
+        'Programming Language :: Python :: 3.12',
         'Topic :: Scientific/Engineering :: Artificial Intelligence',
         'Topic :: Software Development :: Libraries :: Python Modules',
     ],
     zip_safe=False,
-    python_requires='>=3.7',
+    python_requires='>=3.8',
 )

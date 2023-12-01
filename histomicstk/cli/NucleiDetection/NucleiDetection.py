@@ -37,11 +37,11 @@ def read_input_image(args, process_whole_image=False):
 def image_inversion_flag_setter(args=None):
     # generates image inversion flags
     invert_image, default_img_inversion = False, False
-    if args.ImageInversionForm == "Yes":
+    if args.ImageInversionForm == 'Yes':
         invert_image = True
-    if args.ImageInversionForm == "No":
+    if args.ImageInversionForm == 'No':
         invert_image = False
-    if args.ImageInversionForm == "default":
+    if args.ImageInversionForm == 'default':
         default_img_inversion = True
     return invert_image, default_img_inversion
 
@@ -114,7 +114,7 @@ def process_wsi(ts, it_kwargs, args, im_fgnd_mask_lres=None,
 
     fgnd_frac_comp_time = time.time() - start_time
 
-    print('Number of foreground tiles = {:d} ({:2f}%%)'.format(
+    print('Number of foreground tiles = {:d} ({:.2f}%)'.format(
         num_fgnd_tiles, percent_fgnd_tiles))
 
     print('Tile foreground fraction computation time = {}'.format(
@@ -172,7 +172,7 @@ def detect_nuclei_with_dask(ts, tile_fgnd_frac_list, it_kwargs, args,
     tile_nuclei_list = dask.delayed(tile_nuclei_list).compute()
 
     nuclei_list = [anot
-                   for anot_list, _ in tile_nuclei_list for anot in anot_list]
+                   for anot_list in tile_nuclei_list for anot in anot_list]
 
     nuclei_detection_time = time.time() - start_time
 
@@ -207,7 +207,7 @@ def main(args):
     if tile_overlap == -1:
         tile_overlap = (args.max_radius + 1) * 4
 
-    # retrive style
+    # retrieve style
     if not args.style or args.style.startswith('{#control'):
         args.style = None
 
@@ -219,11 +219,11 @@ def main(args):
         'style': {args.style}
     }
 
-    # retrive frame
+    # retrieve frame
     if not args.frame or args.frame.startswith('{#control'):
         args.frame = None
     elif not args.frame.isdigit():
-        raise Exception("The given frame value is not an integer")
+        raise Exception('The given frame value is not an integer')
     else:
         it_kwargs['frame'] = args.frame
 
@@ -325,7 +325,7 @@ def main(args):
             nuclei_list, args.nuclei_annotation_format)
         nuclei_removal_setup_time = time.time() - nuclei_removal_start_time
 
-        print('Number of nuclei after overlap removal {}'.format(len(nuclei_list)))
+        print(f'Number of nuclei after overlap removal {len(nuclei_list)}')
         print('Nuclei removal processing time = {}'.format(
             cli_utils.disp_time_hms(nuclei_removal_setup_time)))
 
